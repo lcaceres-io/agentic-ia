@@ -1,0 +1,13 @@
+services:
+  agentic-ia:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - agentic-ia-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  agentic-ia-data:

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Asistente Académico · Universidad Barceló</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  href="https://fonts.googleapis.com/css2?family=Raleway:wght@400;500;600;700&display=swap"
+  rel="stylesheet"
+/>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar__brand">
+      <div class="topbar__crest">UB</div>
+      <div>
+        <p class="topbar__titulo">Asistente Académico</p>
+        <p class="topbar__subtitulo">Universidad Barceló · Agentic IA</p>
+      </div>
+    </div>
+    <span class="topbar__badge">Demo · Function Calling + Structured Output</span>
+  </header>
+
+  <main class="layout">
+    <section class="chat">
+      <div id="mensajes" class="chat__mensajes">
+        <div class="mensaje mensaje--bot">
+          <div class="mensaje__burbuja">
+            Hola, soy el asistente académico virtual. Puedo consultarte notas, promedio,
+            asistencia y materias. Probá preguntando, por ejemplo:
+            <em>"¿Cuáles son las notas de Lucas Cáceres?"</em>
+          </div>
+        </div>
+      </div>
+
+      <form id="form-chat" class="chat__form">
+        <input
+          id="input-mensaje"
+          class="chat__input"
+          type="text"
+          placeholder="Escribí tu consulta académica..."
+          autocomplete="off"
+        />
+        <button class="chat__enviar" type="submit">Enviar</button>
+      </form>
+    </section>
+
+    <aside class="panel">
+      <h2 class="panel__titulo">🔧 Tools ejecutadas</h2>
+      <p class="panel__ayuda">
+        Acá se muestra, en vivo, qué herramienta eligió el modelo y con qué
+        argumentos la llamó — la aplicación es quien realmente la ejecuta
+        contra SQLite, nunca el LLM.
+      </p>
+      <div id="trace" class="panel__trace">
+        <p class="panel__vacio">Todavía no se ejecutó ninguna tool.</p>
+      </div>
+    </aside>
+  </main>
+
+  <script src="/static/script.js"></script>
+</body>
+</html>
