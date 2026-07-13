@@ -75,23 +75,30 @@ def procesar_mensaje(historial: list[dict], mensaje: str) -> dict:
     ]
     contents.append(types.Content(role="user", parts=[types.Part(text=mensaje)]))
 
-    # --- Fase 1: Function Calling -------------------------------------
-    respuesta_1 = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            tools=[TOOLS],
-            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-        ),
-    )
-
+    # --- Fase 1: Function Calling ---------------------------------------
+    # El modelo puede necesitar encadenar varias tools (ej: buscar_alumno
+    # para resolver un id y despues obtener_notas con ese id), asi que
+    # repetimos la llamada mientras siga pidiendo ejecutar tools.
     trace: list[dict] = []
-    function_calls = respuesta_1.function_calls
+    for _ in range(5):
+        respuesta_tools = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                tools=[TOOLS],
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
+        )
 
-    if function_calls:
-        contents.append(respuesta_1.candidates[0].content)
-        response_parts, trace = _ejecutar_tool_calls(function_calls)
+        function_calls = respuesta_tools.function_calls
+        if not function_calls:
+            break
+
+        contents.append(respuesta_tools.candidates[0].content)
+        response_parts, paso_trace = _ejecutar_tool_calls(function_calls)
+        trace.extend(paso_trace)
         contents.append(types.Content(role="user", parts=response_parts))
 
     # --- Fase 2: Structured Output --------------------------------------
@@ -102,6 +109,7 @@ def procesar_mensaje(historial: list[dict], mensaje: str) -> dict:
             system_instruction=SYSTEM_PROMPT,
             response_mime_type="application/json",
             response_schema=RespuestaFinal,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
         ),
     )
 
