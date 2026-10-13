@@ -13,16 +13,18 @@ Fase 2 (Structured Output):
 
 import logging
 import threading
+import time
 
+import httpx
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
 
 from app.config import GEMINI_API_KEY, GEMINI_MODELS
-
-logger = logging.getLogger(__name__)
 from app.schemas import RespuestaFinal
 from app.tools import DISPATCH, TOOLS
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """
 Sos el Asistente Academico Virtual de la Universidad Barcelo.
@@ -42,7 +44,18 @@ Reglas:
   academica universitaria.
 """.strip()
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+# Un solo intento por modelo y timeout corto: la rotacion entre modelos hace
+# de reintento, y los reintentos con espera del SDK solo demorarian la rotacion.
+client = genai.Client(
+    api_key=GEMINI_API_KEY,
+    http_options=types.HttpOptions(
+        timeout=15_000,
+        retry_options=types.HttpRetryOptions(attempts=1),
+    ),
+)
+
+VUELTAS = 2  # veces que se recorre la lista completa antes de rendirse
+PAUSA_ENTRE_VUELTAS = 1.5
 
 # Errores transitorios ante los que se rota al siguiente modelo.
 # 503 = sobrecargado, 429 = cuota del modelo, 500/504 = fallas del servidor,
@@ -71,31 +84,38 @@ def _generar(contents: list[types.Content], **config_kwargs) -> types.GenerateCo
     global _favorito
     ultimo_error: Exception | None = None
 
-    for modelo in _orden_modelos():
-        # thinking_budget=0 solo lo soporta la familia 2.5
-        extra = {"thinking_config": types.ThinkingConfig(thinking_budget=0)} if "2.5" in modelo else {}
-        try:
-            respuesta = client.models.generate_content(
-                model=modelo,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT, **config_kwargs, **extra
-                ),
-            )
-        except genai_errors.APIError as e:
-            if e.code not in CODIGOS_ROTABLES:
-                raise
-            logger.warning("Modelo %s fallo con %s, rotando al siguiente", modelo, e.code)
-            ultimo_error = e
-            continue
+    for vuelta in range(VUELTAS):
+        if vuelta:
+            time.sleep(PAUSA_ENTRE_VUELTAS)
+        for modelo in _orden_modelos():
+            # thinking_budget=0 solo lo soporta la familia 2.5
+            extra = {"thinking_config": types.ThinkingConfig(thinking_budget=0)} if "2.5" in modelo else {}
+            try:
+                respuesta = client.models.generate_content(
+                    model=modelo,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT, **config_kwargs, **extra
+                    ),
+                )
+            except genai_errors.APIError as e:
+                if e.code not in CODIGOS_ROTABLES:
+                    raise
+                logger.warning("Modelo %s fallo con %s, rotando al siguiente", modelo, e.code)
+                ultimo_error = e
+                continue
+            except httpx.TimeoutException as e:
+                logger.warning("Modelo %s: timeout, rotando al siguiente", modelo)
+                ultimo_error = e
+                continue
 
-        with _lock:
-            if _favorito != modelo:
-                logger.info("Modelo favorito: %s", modelo)
-                _favorito = modelo
-        return respuesta
+            with _lock:
+                if _favorito != modelo:
+                    logger.info("Modelo favorito: %s", modelo)
+                    _favorito = modelo
+            return respuesta
 
-    raise ultimo_error  # todos los modelos fallaron
+    raise ultimo_error  # todos los modelos fallaron en todas las vueltas
 
 
 def _ejecutar_tool_calls(function_calls: list[types.FunctionCall]) -> tuple[list[types.Part], list[dict]]:
