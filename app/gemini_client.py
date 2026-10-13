@@ -45,8 +45,9 @@ Reglas:
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # Errores transitorios ante los que se rota al siguiente modelo.
-# 503 = sobrecargado, 429 = cuota del modelo, 500/504 = fallas del servidor.
-CODIGOS_ROTABLES = {429, 500, 503, 504}
+# 503 = sobrecargado, 429 = cuota del modelo, 500/504 = fallas del servidor,
+# 404 = modelo retirado por Google.
+CODIGOS_ROTABLES = {404, 429, 500, 503, 504}
 
 _lock = threading.Lock()
 _favorito: str | None = None  # ultimo modelo que respondio OK
