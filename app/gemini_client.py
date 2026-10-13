@@ -11,10 +11,16 @@ Fase 2 (Structured Output):
     respuesta final, forzando que el JSON cumpla el esquema RespuestaFinal.
 """
 
+import logging
+import threading
+
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 
-from app.config import GEMINI_API_KEY, GEMINI_MODEL
+from app.config import GEMINI_API_KEY, GEMINI_MODELS
+
+logger = logging.getLogger(__name__)
 from app.schemas import RespuestaFinal
 from app.tools import DISPATCH, TOOLS
 
@@ -37,6 +43,58 @@ Reglas:
 """.strip()
 
 client = genai.Client(api_key=GEMINI_API_KEY)
+
+# Errores transitorios ante los que se rota al siguiente modelo.
+# 503 = sobrecargado, 429 = cuota del modelo, 500/504 = fallas del servidor.
+CODIGOS_ROTABLES = {429, 500, 503, 504}
+
+_lock = threading.Lock()
+_favorito: str | None = None  # ultimo modelo que respondio OK
+
+
+def _orden_modelos() -> list[str]:
+    """Favorito primero (si hay), despues el resto en el orden configurado."""
+    with _lock:
+        fav = _favorito
+    if fav in GEMINI_MODELS:
+        return [fav] + [m for m in GEMINI_MODELS if m != fav]
+    return list(GEMINI_MODELS)
+
+
+def _generar(contents: list[types.Content], **config_kwargs) -> types.GenerateContentResponse:
+    """
+    generate_content con rotacion de modelos. Empieza por el favorito y, si
+    falla con un error transitorio, prueba el siguiente. El modelo que
+    responde pasa a ser el favorito de las proximas consultas.
+    """
+    global _favorito
+    ultimo_error: Exception | None = None
+
+    for modelo in _orden_modelos():
+        # thinking_budget=0 solo lo soporta la familia 2.5
+        extra = {"thinking_config": types.ThinkingConfig(thinking_budget=0)} if "2.5" in modelo else {}
+        try:
+            respuesta = client.models.generate_content(
+                model=modelo,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT, **config_kwargs, **extra
+                ),
+            )
+        except genai_errors.APIError as e:
+            if e.code not in CODIGOS_ROTABLES:
+                raise
+            logger.warning("Modelo %s fallo con %s, rotando al siguiente", modelo, e.code)
+            ultimo_error = e
+            continue
+
+        with _lock:
+            if _favorito != modelo:
+                logger.info("Modelo favorito: %s", modelo)
+                _favorito = modelo
+        return respuesta
+
+    raise ultimo_error  # todos los modelos fallaron
 
 
 def _ejecutar_tool_calls(function_calls: list[types.FunctionCall]) -> tuple[list[types.Part], list[dict]]:
@@ -81,15 +139,10 @@ def procesar_mensaje(historial: list[dict], mensaje: str) -> dict:
     # repetimos la llamada mientras siga pidiendo ejecutar tools.
     trace: list[dict] = []
     for _ in range(5):
-        respuesta_tools = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                tools=[TOOLS],
-                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-            ),
+        respuesta_tools = _generar(
+            contents,
+            tools=[TOOLS],
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         )
 
         function_calls = respuesta_tools.function_calls
@@ -102,15 +155,10 @@ def procesar_mensaje(historial: list[dict], mensaje: str) -> dict:
         contents.append(types.Content(role="user", parts=response_parts))
 
     # --- Fase 2: Structured Output --------------------------------------
-    respuesta_2 = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            response_mime_type="application/json",
-            response_schema=RespuestaFinal,
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
-        ),
+    respuesta_2 = _generar(
+        contents,
+        response_mime_type="application/json",
+        response_schema=RespuestaFinal,
     )
 
     final: RespuestaFinal = respuesta_2.parsed
