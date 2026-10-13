@@ -7,23 +7,30 @@ estos argumentos" y es este modulo, controlado por nuestra aplicacion, el
 que realmente las corre (ver gemini_client.py).
 """
 
+import unicodedata
+
 from google.genai import types
 
 from app.database import get_connection
 
 
 def buscar_alumno(nombre: str) -> dict:
-    """Busca un alumno por nombre (busqueda parcial, sin importar mayusculas)."""
+    """Busca un alumno por nombre (parcial, sin importar mayusculas ni tildes)."""
     conn = get_connection()
-    fila = conn.execute(
-        "SELECT id, nombre, email, carrera FROM alumnos WHERE nombre LIKE ?",
-        (f"%{nombre}%",),
-    ).fetchone()
+    filas = conn.execute("SELECT id, nombre, email, carrera FROM alumnos").fetchall()
     conn.close()
 
-    if fila is None:
-        return {"error": f"No se encontro ningun alumno que coincida con '{nombre}'."}
-    return dict(fila)
+    buscado = _normalizar(nombre)
+    for fila in filas:
+        if buscado in _normalizar(fila["nombre"]):
+            return dict(fila)
+    return {"error": f"No se encontro ningun alumno que coincida con '{nombre}'."}
+
+
+def _normalizar(texto: str) -> str:
+    """Minusculas y sin tildes: 'Cáceres' -> 'caceres'."""
+    sin_tildes = unicodedata.normalize("NFD", texto)
+    return "".join(c for c in sin_tildes if unicodedata.category(c) != "Mn").lower().strip()
 
 
 def obtener_notas(id_alumno: int) -> dict:
